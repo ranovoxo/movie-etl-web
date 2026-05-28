@@ -8,7 +8,8 @@ const currencyFormatter = new Intl.NumberFormat("en-US");
 const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { cache: "no-store" });
+  const apiBaseUrl = process.env.NEXT_PUBLIC_REPORTS_API_URL?.replace(/\/$/, "");
+  const response = await fetch(`${apiBaseUrl ?? ""}${path}`, { cache: "no-store" });
 
   if (!response.ok) {
     throw new Error(`Request failed: ${path}`);
