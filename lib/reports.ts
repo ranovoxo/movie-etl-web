@@ -19,7 +19,7 @@ import type {
 const TOP_MOVIES_QUERY = `
   select
     title,
-    release_year,
+    nullif(split_part(release_date, '-', 1), '')::int as release_year,
     vote_average,
     vote_count,
     weighted_score,
@@ -31,21 +31,27 @@ const TOP_MOVIES_QUERY = `
 
 const RATINGS_BY_LANGUAGE_QUERY = `
   select
-    original_language,
-    avg_rating,
-    movie_count
-  from gold_avg_rating_by_language
-  order by avg_rating desc nulls last
+    ratings.language as original_language,
+    ratings.avg_vote as avg_rating,
+    coalesce(language_counts.movie_count, 0)::int as movie_count
+  from gold_avg_rating_by_language ratings
+  left join (
+    select original_language, count(*)::int as movie_count
+    from movies_silver
+    group by original_language
+  ) language_counts
+    on language_counts.original_language = ratings.language
+  order by ratings.avg_vote desc nulls last
   limit 12
 `;
 
 const YEARLY_COUNTS_QUERY = `
   select
-    release_year,
-    movie_count
+    year::int as release_year,
+    count::int as movie_count
   from gold_yearly_counts
-  where release_year is not null
-  order by release_year asc
+  where year is not null
+  order by year asc
 `;
 
 const GENRE_PREDICTIONS_QUERY = `
@@ -65,7 +71,7 @@ const SUMMARY_QUERY = `
     select
       count(*)::int as total_movies,
       count(distinct original_language)::int as total_languages,
-      max(release_year)::int as latest_release_year
+      max(nullif(split_part(release_date, '-', 1), '')::int) as latest_release_year
     from movies_silver
   ),
   top_movie as (
@@ -73,25 +79,28 @@ const SUMMARY_QUERY = `
     from gold_top_movies
     order by weighted_score desc nulls last
     limit 1
-  ),
-  predictions as (
-    select
-      case
-        when count(*) = 0 then null
-        else avg((actual_genre = predicted_genre)::int)::float
-      end as prediction_accuracy
-    from ml_genre_predictions
   )
   select
     movie_stats.total_movies,
     movie_stats.total_languages,
     movie_stats.latest_release_year,
     top_movie.title as top_movie,
-    top_movie.weighted_score as top_weighted_score,
-    predictions.prediction_accuracy
+    top_movie.weighted_score as top_weighted_score
   from movie_stats
   cross join top_movie
-  cross join predictions
+`;
+
+const ML_TABLE_EXISTS_QUERY = `
+  select to_regclass('public.ml_genre_predictions') is not null as exists
+`;
+
+const PREDICTION_ACCURACY_QUERY = `
+  select
+    case
+      when count(*) = 0 then null
+      else avg((actual_genre = predicted_genre)::int)::float
+    end as prediction_accuracy
+  from ml_genre_predictions
 `;
 
 function numberValue(value: unknown, fallback = 0) {
@@ -162,6 +171,11 @@ export async function getYearlyCounts(): Promise<YearlyCount[]> {
 
 export async function getGenrePredictions(): Promise<GenrePrediction[]> {
   return fromDatabase(async () => {
+    const exists = await queryRows<Record<string, unknown>>(ML_TABLE_EXISTS_QUERY);
+    if (!exists[0]?.exists) {
+      return [];
+    }
+
     const rows = await queryRows<Record<string, unknown>>(GENRE_PREDICTIONS_QUERY);
 
     return rows.map((row) => ({
@@ -176,8 +190,17 @@ export async function getGenrePredictions(): Promise<GenrePrediction[]> {
 
 export async function getSummary(): Promise<ReportSummary> {
   return fromDatabase(async () => {
-    const rows = await queryRows<Record<string, unknown>>(SUMMARY_QUERY);
+    const [rows, mlTableExists] = await Promise.all([
+      queryRows<Record<string, unknown>>(SUMMARY_QUERY),
+      queryRows<Record<string, unknown>>(ML_TABLE_EXISTS_QUERY)
+    ]);
     const row = rows[0] ?? {};
+    let predictionAccuracy: number | null = null;
+
+    if (mlTableExists[0]?.exists) {
+      const accuracyRows = await queryRows<Record<string, unknown>>(PREDICTION_ACCURACY_QUERY);
+      predictionAccuracy = accuracyRows[0]?.prediction_accuracy == null ? null : numberValue(accuracyRows[0].prediction_accuracy);
+    }
 
     return {
       total_movies: numberValue(row.total_movies),
@@ -185,7 +208,7 @@ export async function getSummary(): Promise<ReportSummary> {
       latest_release_year: integerValue(row.latest_release_year),
       top_movie: String(row.top_movie ?? "Unavailable"),
       top_weighted_score: numberValue(row.top_weighted_score),
-      prediction_accuracy: row.prediction_accuracy == null ? null : numberValue(row.prediction_accuracy),
+      prediction_accuracy: predictionAccuracy,
       latest_etl_run: null,
       source: "postgres"
     };
