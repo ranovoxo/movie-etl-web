@@ -6,6 +6,12 @@ export function hasDatabaseConfig() {
   return Boolean(process.env.DATABASE_URL);
 }
 
+function connectionStringWithoutSslMode(connectionString: string) {
+  const url = new URL(connectionString);
+  url.searchParams.delete("sslmode");
+  return url.toString();
+}
+
 export function getPool() {
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL is not configured");
@@ -15,7 +21,7 @@ export function getPool() {
     const sslEnabled = process.env.PGSSL !== "false";
 
     pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: connectionStringWithoutSslMode(process.env.DATABASE_URL),
       ssl: sslEnabled ? { rejectUnauthorized: false } : false,
       max: 5,
       idleTimeoutMillis: 30_000,
