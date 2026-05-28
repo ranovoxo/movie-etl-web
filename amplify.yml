@@ -6,7 +6,7 @@ frontend:
         - npm ci
     build:
       commands:
-        - env | grep -e DATABASE_URL -e PGSSL -e NEXT_PUBLIC_PIPELINE_LABEL >> .env.production
+        - env | grep -e DATABASE_URL -e PGSSL -e NEXT_PUBLIC_PIPELINE_LABEL -e NEXT_PUBLIC_REPORTS_API_URL >> .env.production
         - npm run build
   artifacts:
     baseDirectory: .next
